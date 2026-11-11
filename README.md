@@ -221,18 +221,37 @@ Use the default compiler in your environment or use the following overrides to C
 | [msvc](https://learn.microsoft.com/en-us/cpp/overview/visual-cpp-language-conformance) | build from menu|
 
 ### CMake project options
-These options can be passed on the CMake command line:
+These options can be passed on the CMake command line. Defaults marked *top-level* are on when fix8 is
+built on its own and off when it is a subproject. When fix8 is the top-level project, the older unprefixed
+names (e.g. `BUILD_UNITTESTS`) are still accepted, with a deprecation warning.
 | Option | Description| Default | Example|
 | :--- | :--- | :--- | :--- |
-|`BUILD_UNITTESTS`|enable building unit tests|`true`| `-DBUILD_UNITTESTS:bool=false`|
-|`BUILD_ALL_WARNINGS`|enable building with all warnings|`true`| `-DBUILD_ALL_WARNINGS:bool=false`|
-|`BUILD_DOXYGEN_DOCS`|enable building of self documentation|`false`| `-DBUILD_DOXYGEN_DOCS:bool=true`|
-|`BUILD_POCO_VERSION`|Poco tag to download|`poco-1.14.2-release`|`-DBUILD_POCO_VERSION:string=poco-1.12.5-release`|
-|`BUILD_TBB_VERSION`|TBB tag to download|`v2022.2.0`|`-DBUILD_TBB_VERSION:string=v2021.12.0`|
-|`BUILD_GOOGLETEST_VERSION`|GoogleTest tag to download|`main`|`-DBUILD_GOOGLETEST_VERSION:string=v1.16.0`|
-|`BUILD_MINIMAL_POCO`|build only required Poco components|`true`|`-DBUILD_MINIMAL_POCO:bool=false`|
-|`BUILD_EP264`|enable building of `FIX50SP2_EP264` schema library[^1]|`false`|`-DBUILD_EP264:bool=true`|
-|`BUILD_ZLIB_VERSION`|zlib tag to download (windows only)|`v1.3.1`|`-DBUILD_ZLIB_VERSION:string=v1.3.1`|
+|`FIX8_BUILD_UNITTESTS`|enable building unit tests|*top-level*| `-DFIX8_BUILD_UNITTESTS:bool=false`|
+|`FIX8_BUILD_EXAMPLES`|enable building test applications (`f8test`, `f8print`, `harness`, `hftest`)|*top-level*| `-DFIX8_BUILD_EXAMPLES:bool=false`|
+|`FIX8_BUILD_ALL_WARNINGS`|enable building with all warnings|`true`| `-DFIX8_BUILD_ALL_WARNINGS:bool=false`|
+|`FIX8_BUILD_DOXYGEN_DOCS`|enable building of self documentation|`false`| `-DFIX8_BUILD_DOXYGEN_DOCS:bool=true`|
+|`FIX8_BUILD_POCO_VERSION`|Poco tag to download|`poco-1.14.2-release`|`-DFIX8_BUILD_POCO_VERSION:string=poco-1.12.5-release`|
+|`FIX8_BUILD_TBB_VERSION`|TBB tag to download|`v2022.2.0`|`-DFIX8_BUILD_TBB_VERSION:string=v2021.12.0`|
+|`FIX8_BUILD_GOOGLETEST_VERSION`|GoogleTest tag to download|`v1.18.0`|`-DFIX8_BUILD_GOOGLETEST_VERSION:string=v1.16.0`|
+|`FIX8_BUILD_MINIMAL_POCO`|build only required Poco components|`true`|`-DFIX8_BUILD_MINIMAL_POCO:bool=false`|
+|`FIX8_BUILD_EP264`|enable building of `FIX50SP2_EP264` schema library[^1]|`false`|`-DFIX8_BUILD_EP264:bool=true`|
+|`FIX8_BUILD_ZLIB_VERSION`|zlib tag to download (windows only)|`v1.3.1`|`-DFIX8_BUILD_ZLIB_VERSION:string=v1.3.1`|
+|`FIX8_SCHEMAS`|FIX schema libraries to build|all of `FIX40`..`FIX50SP2`|`-DFIX8_SCHEMAS:string=FIX42;FIX44`|
+|`FIX8_TBB_MALLOC_PROXY`|link TBB's malloc proxy, which replaces `malloc`/`new` for the whole process|*top-level*|`-DFIX8_TBB_MALLOC_PROXY:bool=false`|
+|`FIX8_INSTALL`|generate install rules for fix8|*top-level*|`-DFIX8_INSTALL:bool=true`|
+
+### Using fix8 as a subproject
+fix8 can be added to another CMake project with `add_subdirectory()` or `FetchContent`. Tests, test
+applications, install rules and the TBB malloc proxy are off by default, the parent's cache (build type,
+`BUILD_SHARED_LIBS`, output directories) is left alone, and Poco/TBB/GoogleTest are only downloaded if the
+parent has not already provided `Poco::Foundation`, `TBB::tbb` or `GTest::gtest`.
+```cmake
+set(FIX8_SCHEMAS FIX42)          # build only the schema libraries you need
+add_subdirectory(external/fix8)
+target_link_libraries(my_app PRIVATE fix8::FIX42)   # brings in fix8::fix8 and its include paths
+```
+Targets: `fix8::fix8` (shared), `fix8::fix8stat` (static), `fix8::<schema>` for each schema library, and
+`fix8::f8c` (the schema compiler).
 
 ### Run the build
 ```bash
@@ -246,7 +265,7 @@ These options can be passed on the CMake command line:
 For example, to build with gcc against the latest poco and tbb from your build directory:
 
 ```bash
-% CXX=g++ CC=gcc cmake -DBUILD_POCO_VERSION:string=main -DBUILD_TBB_VERSION:string=master ..
+% CXX=g++ CC=gcc cmake -DFIX8_BUILD_POCO_VERSION:string=main -DFIX8_BUILD_TBB_VERSION:string=master ..
 ```
 
 ### Run the optional test cases
