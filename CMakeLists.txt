@@ -43,7 +43,9 @@
 #   Community  Edition's capabilities, you can find out and learn more about the Pro version at
 #   www.fix8mt.com
 # ---------------------------------------------------------------------------------------------
-cmake_minimum_required (VERSION 3.20)
+# 3.21 for PROJECT_IS_TOP_LEVEL: ON when fix8 is built on its own, OFF when it is added to
+# another project with add_subdirectory() or FetchContent
+cmake_minimum_required (VERSION 3.21)
 include(cmake/buildutils.cmake)
 project (fix8
    LANGUAGES CXX C
@@ -58,22 +60,38 @@ set(fix8_CMAKE_CXX_FLAGS_STR "${CMAKE_CXX_FLAGS}")
 if (NOT MSVC)
 	fix8_setbuildtype(FIX8 Release)
 endif()
-message("-- ${BoldCyan}${CMAKE_PROJECT_NAME} version ${CMAKE_PROJECT_VERSION}, build type ${CMAKE_BUILD_TYPE}${Reset}")
-fix8_addoption("BUILD_UNITTESTS|enable building unit tests|true")
-fix8_addoption("BUILD_ALL_WARNINGS|enable building with all warnings|true")
-fix8_addoption("BUILD_DOXYGEN_DOCS|enable building of self documentation|false")
-fix8_addoption("BUILD_MINIMAL_POCO|build only required Poco components|true")
-fix8_addoption("BUILD_EP264|enable building of FIX50SP2_EP264 schema library|false")
-fix8_addoption("BUILD_POCO_VERSION|Poco tag to download|poco-1.14.2-release")
-fix8_addoption("BUILD_TBB_VERSION|TBB tag to download|v2022.2.0")
-fix8_addoption("BUILD_GOOGLETEST_VERSION|GoogleTest tag to download|main")
-fix8_addoption("BUILD_ZLIB_VERSION|zlib tag to download (windows only)|v1.3.1")
+message("-- ${BoldCyan}${PROJECT_NAME} version ${PROJECT_VERSION}, build type ${CMAKE_BUILD_TYPE}${Reset}")
+fix8_addoption("FIX8_BUILD_UNITTESTS|enable building unit tests|${PROJECT_IS_TOP_LEVEL}")
+fix8_addoption("FIX8_BUILD_EXAMPLES|enable building test applications (f8test f8print harness hftest)|${PROJECT_IS_TOP_LEVEL}")
+fix8_addoption("FIX8_BUILD_ALL_WARNINGS|enable building with all warnings|true")
+fix8_addoption("FIX8_BUILD_DOXYGEN_DOCS|enable building of self documentation|false")
+fix8_addoption("FIX8_BUILD_MINIMAL_POCO|build only required Poco components|true")
+fix8_addoption("FIX8_BUILD_EP264|enable building of FIX50SP2_EP264 schema library|false")
+fix8_addoption("FIX8_BUILD_POCO_VERSION|Poco tag to download|poco-1.14.2-release")
+fix8_addoption("FIX8_BUILD_TBB_VERSION|TBB tag to download|v2022.2.0")
+fix8_addoption("FIX8_BUILD_GOOGLETEST_VERSION|GoogleTest tag to download|v1.18.0")
+fix8_addoption("FIX8_BUILD_ZLIB_VERSION|zlib tag to download (windows only)|v1.3.1")
+fix8_addoption("FIX8_TBB_MALLOC_PROXY|link TBB malloc proxy (replaces malloc/new for the whole process)|${PROJECT_IS_TOP_LEVEL}")
+fix8_addoption("FIX8_INSTALL|generate install rules for fix8|${PROJECT_IS_TOP_LEVEL}")
+
+set(fix8_all_schemas FIX40 FIX41 FIX42 FIX43 FIX44 FIX50 FIX50SP1 FIX50SP2)
+if(NOT DEFINED FIX8_SCHEMAS) # a parent project may set this as a normal variable
+	set(FIX8_SCHEMAS "${fix8_all_schemas}" CACHE STRING "FIX schema libraries to build")
+endif()
+foreach(schema ${FIX8_SCHEMAS})
+	if(NOT schema IN_LIST fix8_all_schemas)
+		message(FATAL_ERROR "${BoldRed}FIX8_SCHEMAS: unknown schema ${schema} (choose from ${fix8_all_schemas})${Reset}")
+	endif()
+endforeach()
+message("-- Build: FIX schema libraries: ${Green}${FIX8_SCHEMAS}${Reset}")
 
 # ---------------------------------------------------------------------------------------------
 # deps
+# a dependency whose targets already exist (e.g. the parent project found or fetched it) is
+# used as-is; otherwise it is downloaded
 # ---------------------------------------------------------------------------------------------
 if (MSVC)
-	fix8_fetch(zip madler/zlib ${BUILD_ZLIB_VERSION})
+	fix8_fetch(zip madler/zlib ${FIX8_BUILD_ZLIB_VERSION})
 	set(ziplib zlib)
 	set(poco_ssl_libs "")
 	add_library(getopt STATIC msvc/getopt/getopt.c)
@@ -94,35 +112,67 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM|Intel")
 		 message(STATUS "${BoldRed}Bypassing POCO's C++17 check for Intel compiler${Reset}")
 		 set(CXX17_COMPILER TRUE PARENT_SCOPE)
 	endfunction()
-	file(WRITE "${CMAKE_BINARY_DIR}/dummy/CXX1x.cmake"
+	file(WRITE "${PROJECT_BINARY_DIR}/dummy/CXX1x.cmake"
 	 "# This empty file ensures our function override takes precedence")
-	list(INSERT CMAKE_MODULE_PATH 0 "${CMAKE_BINARY_DIR}/dummy")
+	list(INSERT CMAKE_MODULE_PATH 0 "${PROJECT_BINARY_DIR}/dummy")
 endif()
-if(BUILD_MINIMAL_POCO)
-	set(ENABLE_ACTIVERECORD OFF CACHE BOOL "" FORCE)
-	set(ENABLE_ACTIVERECORD_COMPILER OFF CACHE BOOL "" FORCE)
-	set(ENABLE_PAGECOMPILER OFF CACHE BOOL "" FORCE)
-	set(ENABLE_PAGECOMPILER_FILE2PAGE OFF CACHE BOOL "" FORCE)
-	set(ENABLE_DATA OFF CACHE BOOL "" FORCE)
-	set(ENABLE_MONGODB OFF CACHE BOOL "" FORCE)
-	set(ENABLE_PROMETHEUS OFF CACHE BOOL "" FORCE)
-	set(ENABLE_REDIS OFF CACHE BOOL "" FORCE)
-	set(ENABLE_SQLITE OFF CACHE BOOL "" FORCE)
-	set(ENABLE_DATA_SQLITE OFF CACHE BOOL "" FORCE)
-	set(ENABLE_DATA_MYSQL OFF CACHE BOOL "" FORCE)
-	set(ENABLE_DATA_ODBC OFF CACHE BOOL "" FORCE)
-	set(ENABLE_DATA_POSTGRESQL OFF CACHE BOOL "" FORCE)
-	set(ENABLE_APACHECONNECTOR OFF CACHE BOOL "" FORCE)
-	set(ENABLE_FOUNDATION_APR OFF CACHE BOOL "" FORCE)
-	set(ENABLE_JWT OFF CACHE BOOL "" FORCE)
-	set(ENABLE_ZIP OFF CACHE BOOL "" FORCE)
-	set(ENABLE_ENCODINGS OFF CACHE BOOL "" FORCE)
-	set(ENABLE_JSON OFF CACHE BOOL "" FORCE)
-	set(ENABLE_XML OFF CACHE BOOL "" FORCE)
+if(NOT TARGET Poco::Foundation)
+	# Poco's generic option names would otherwise pick up a parent project's ENABLE_TESTS etc.
+	set(ENABLE_TESTS OFF)
+	set(ENABLE_SAMPLES OFF)
+	if(FIX8_BUILD_MINIMAL_POCO)
+		# normal (not cache) variables: Poco's option() calls honour them (CMP0077) and they stay
+		# scoped to this directory instead of overriding Poco settings for the whole build
+		foreach(poco_opt ACTIVERECORD ACTIVERECORD_COMPILER PAGECOMPILER PAGECOMPILER_FILE2PAGE DATA
+				MONGODB PROMETHEUS REDIS SQLITE DATA_SQLITE DATA_MYSQL DATA_ODBC DATA_POSTGRESQL
+				APACHECONNECTOR FOUNDATION_APR JWT ZIP ENCODINGS JSON XML)
+			set(ENABLE_${poco_opt} OFF)
+		endforeach()
+	endif()
+	set(fix8_tmp_cache_vars "")
+	if(NOT PROJECT_IS_TOP_LEVEL)
+		# Poco declares option(BUILD_SHARED_LIBS ON) and caches CMAKE_<KIND>_OUTPUT_DIRECTORY under
+		# the top-level binary dir, both of which would leak into the parent project. Shadow
+		# BUILD_SHARED_LIBS here (fix8 is built and tested against shared deps), and pre-seed any
+		# output directory the parent has not set, removing it again once Poco is configured.
+		set(BUILD_SHARED_LIBS ON)
+		foreach(kind RUNTIME LIBRARY ARCHIVE)
+			foreach(config "" ${CMAKE_CONFIGURATION_TYPES})
+				if(config STREQUAL "")
+					set(var CMAKE_${kind}_OUTPUT_DIRECTORY)
+				else()
+					string(TOUPPER ${config} config_upper)
+					set(var CMAKE_${kind}_OUTPUT_DIRECTORY_${config_upper})
+				endif()
+				if(NOT DEFINED ${var})
+					if(kind STREQUAL "RUNTIME")
+						set(${var} ${PROJECT_BINARY_DIR}/bin CACHE PATH "")
+					else()
+						set(${var} ${PROJECT_BINARY_DIR}/lib CACHE PATH "")
+					endif()
+					list(APPEND fix8_tmp_cache_vars ${var})
+				endif()
+			endforeach()
+		endforeach()
+	endif()
+	fix8_fetch(poco pocoproject/poco ${FIX8_BUILD_POCO_VERSION})
+	foreach(var ${fix8_tmp_cache_vars})
+		set(value $CACHE{${var}})
+		unset(${var} CACHE)
+		set(${var} ${value}) # keep fix8's own outputs in the same place, scoped to fix8
+	endforeach()
 endif()
-fix8_fetch(poco pocoproject/poco ${BUILD_POCO_VERSION})
-set(TBB_TEST OFF)
-fix8_fetch(tbb uxlfoundation/oneTBB ${BUILD_TBB_VERSION})
+if(NOT TARGET TBB::tbb)
+	set(TBB_TEST OFF)
+	# oneTBB forces CMAKE_BUILD_TYPE=RelWithDebInfo into the cache when it is empty; as a
+	# subproject, put the parent's (empty) build type back afterwards
+	set(fix8_parent_build_type "$CACHE{CMAKE_BUILD_TYPE}")
+	get_property(fix8_build_type_doc CACHE CMAKE_BUILD_TYPE PROPERTY HELPSTRING)
+	fix8_fetch(tbb uxlfoundation/oneTBB ${FIX8_BUILD_TBB_VERSION})
+	if(NOT PROJECT_IS_TOP_LEVEL AND NOT "$CACHE{CMAKE_BUILD_TYPE}" STREQUAL "${fix8_parent_build_type}")
+		set(CMAKE_BUILD_TYPE "${fix8_parent_build_type}" CACHE STRING "${fix8_build_type_doc}" FORCE)
+	endif()
+endif()
 
 # ---------------------------------------------------------------------------------------------
 # compiler settings
@@ -135,76 +185,102 @@ cpp_opts()
 set(fix8_libs Poco::Foundation Poco::Net Poco::Util ${poco_ssl_libs} ${ziplib} TBB::tbb)
 macro(build_lib name type)
 	add_library(${name} ${type} ${rsrc})
+	add_library(fix8::${name} ALIAS ${name})
 	target_link_libraries(${name} PUBLIC ${fix8_libs})
-	target_include_directories(${name} PRIVATE include)
+	# the generated f8config.h (binary dir) comes first so a stale copy left in the source tree
+	# by an older build cannot shadow it
+	target_include_directories(${name} PUBLIC
+		$<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>
+		$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+		$<INSTALL_INTERFACE:include>)
+	target_compile_features(${name} PUBLIC cxx_std_17)
 	if (MSVC)
 		add_dependencies(${name} lib_copy ${fix8_libs})
 	endif()
 	comp_opts(${name})
-	install(TARGETS ${name})
+	if(FIX8_INSTALL)
+		install(TARGETS ${name})
+	endif()
 endmacro()
 
 math(EXPR fix8_MAGIC_NUM "${fix8_VERSION_MAJOR} << 24 | ${fix8_VERSION_MINOR} << 12 | ${fix8_VERSION_PATCH}")
 string(TIMESTAMP fix8_SDATE "%Y/%m/%d")
 string(TIMESTAMP fix8_TIMESTAMP)
-configure_file(${CMAKE_SOURCE_DIR}/f8config.h.in ${CMAKE_SOURCE_DIR}/include/fix8/f8config.h @ONLY)
-set(rtdir ${CMAKE_SOURCE_DIR}/runtime)
+configure_file(${PROJECT_SOURCE_DIR}/f8config.h.in ${PROJECT_BINARY_DIR}/include/fix8/f8config.h @ONLY)
+set(rtdir ${PROJECT_SOURCE_DIR}/runtime)
 file(GLOB rsrc "${rtdir}/*.cpp" "${rtdir}/*.c")
 build_lib(fix8 SHARED)
 set_target_properties(fix8 PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
 target_compile_definitions(fix8 PRIVATE BUILD_F8API)
 build_lib(fix8stat STATIC)
-target_compile_definitions(fix8stat PRIVATE BUILD_F8API_STATIC)
+# consumers of the static library also need F8API to expand to nothing on msvc
+target_compile_definitions(fix8stat PUBLIC BUILD_F8API_STATIC)
 if (NOT MSVC)
 	set_target_properties(fix8stat PROPERTIES OUTPUT_NAME fix8)
 endif()
-install(DIRECTORY include DESTINATION .)
-install(DIRECTORY schema DESTINATION share)
-install(DIRECTORY contrib DESTINATION share)
+if(FIX8_INSTALL)
+	install(DIRECTORY include DESTINATION .)
+	install(FILES ${PROJECT_BINARY_DIR}/include/fix8/f8config.h DESTINATION include/fix8)
+	install(DIRECTORY schema DESTINATION share)
+	install(DIRECTORY contrib DESTINATION share)
+endif()
 
 # ---------------------------------------------------------------------------------------------
 # compiler
 # ---------------------------------------------------------------------------------------------
-set(compdir ${CMAKE_SOURCE_DIR}/compiler)
+set(compdir ${PROJECT_SOURCE_DIR}/compiler)
 file(GLOB csrc "${compdir}/*.cpp")
 add_executable(f8c ${csrc})
+add_executable(fix8::f8c ALIAS f8c)
 target_link_libraries(f8c PUBLIC fix8 ${getopt_lib})
 target_include_directories(f8c PRIVATE ${compdir} include)
 comp_opts(f8c)
-install(TARGETS f8c)
+if(FIX8_INSTALL)
+	install(TARGETS f8c)
+endif()
 
 # ---------------------------------------------------------------------------------------------
 # util
 # ---------------------------------------------------------------------------------------------
-set(utildir ${CMAKE_SOURCE_DIR}/util)
+set(utildir ${PROJECT_SOURCE_DIR}/util)
 add_executable(seqedit ${utildir}/seqedit.cpp)
 target_link_libraries(seqedit PUBLIC fix8 ${getopt_lib})
 target_include_directories(seqedit PRIVATE ${utildir} include)
 comp_opts(seqedit)
-install(TARGETS seqedit)
+if(FIX8_INSTALL)
+	install(TARGETS seqedit)
+endif()
 
 # ---------------------------------------------------------------------------------------------
-# shared standard schema libs
+# shared standard schema libs (FIX8_SCHEMAS selects which)
 # ---------------------------------------------------------------------------------------------
-fix8_gen_shared_library(FIX40 schema/FIX40.xml --verbose --namespace FIX40 -p FIX40)
-fix8_gen_shared_library(FIX41 schema/FIX41.xml --verbose --namespace FIX41 -p FIX41)
-fix8_gen_shared_library(FIX42 schema/FIX42.xml --verbose --namespace FIX42 -p FIX42)
-fix8_gen_shared_library(FIX43 schema/FIX43.xml --verbose --namespace FIX43 -p FIX43)
-fix8_gen_shared_library(FIX44 schema/FIX44.xml --verbose --namespace FIX44 -p FIX44)
-fix8_gen_shared_library(FIX50 schema/FIX50.xml --verbose --namespace FIX50 -p FIX50 --fixt ${CMAKE_SOURCE_DIR}/schema/FIXT11.xml)
-fix8_gen_shared_library(FIX50SP1 schema/FIX50SP1.xml --verbose --namespace FIX50SP1 -p FIX50SP1 --fixt ${CMAKE_SOURCE_DIR}/schema/FIXT11.xml)
-fix8_gen_shared_library(FIX50SP2 schema/FIX50SP2.xml --verbose --namespace FIX50SP2 -p FIX50SP2 --fixt ${CMAKE_SOURCE_DIR}/schema/FIXT11.xml)
-install(TARGETS FIX40 FIX41 FIX42 FIX43 FIX44 FIX50 FIX50SP1 FIX50SP2)
-if(BUILD_EP264)
-	fix8_gen_shared_library(FIX50SP2_EP264 schema/FIX50SP2_EP264.xml --verbose --namespace FIX50SP2_EP264 -p FIX50SP2_EP264 --fixt ${CMAKE_SOURCE_DIR}/schema/FIXT11_EP264.xml)
-	install(TARGETS FIX50SP2_EP264)
+foreach(schema ${FIX8_SCHEMAS})
+	if(schema MATCHES "^FIX5")
+		fix8_gen_shared_library(${schema} schema/${schema}.xml --verbose --namespace ${schema} -p ${schema} --fixt ${PROJECT_SOURCE_DIR}/schema/FIXT11.xml)
+	else()
+		fix8_gen_shared_library(${schema} schema/${schema}.xml --verbose --namespace ${schema} -p ${schema})
+	endif()
+endforeach()
+if(FIX8_INSTALL AND FIX8_SCHEMAS)
+	install(TARGETS ${FIX8_SCHEMAS})
+endif()
+if(FIX8_BUILD_EP264)
+	fix8_gen_shared_library(FIX50SP2_EP264 schema/FIX50SP2_EP264.xml --verbose --namespace FIX50SP2_EP264 -p FIX50SP2_EP264 --fixt ${PROJECT_SOURCE_DIR}/schema/FIXT11_EP264.xml)
+	if(FIX8_INSTALL)
+		install(TARGETS FIX50SP2_EP264)
+	endif()
 endif()
 
 # ---------------------------------------------------------------------------------------------
 # unit tests
 # ---------------------------------------------------------------------------------------------
-if(BUILD_UNITTESTS)
-	fix8_fetch(googletest google/googletest ${BUILD_GOOGLETEST_VERSION})
+if((FIX8_BUILD_UNITTESTS OR FIX8_BUILD_EXAMPLES) AND NOT TARGET GTest::gtest)
+	if(NOT FIX8_INSTALL)
+		set(INSTALL_GTEST OFF)
+	endif()
+	fix8_fetch(googletest google/googletest ${FIX8_BUILD_GOOGLETEST_VERSION})
+endif()
+if(FIX8_BUILD_UNITTESTS)
 	set(EXTRA_FIELDS "<field number='9999' name='SampleUserField'  type='STRING' messages='NewOrderSingle:N ExecutionReport:N OrderCancelRequest:Y' />\
 <field number='9991' name='SampleUserField2' type='STRING' messages='NewOrderSingle:N ExecutionReport:N OrderCancelRequest:Y' />")
 	fix8_gen_shared_library(utest schema/FIX42UTEST.xml --verbose -F ${EXTRA_FIELDS} -p utest --namespace UTEST)
@@ -219,56 +295,64 @@ endif()
 # ---------------------------------------------------------------------------------------------
 # test apps
 # ---------------------------------------------------------------------------------------------
-add_executable(f8test test/myfix.cpp)
-fix8_gen_shared_library(myfix schema/FIX50SP2.xml --verbose --namespace MYFIX --prefix myfix --fixt ${CMAKE_SOURCE_DIR}/schema/FIXT11.xml)
-target_link_libraries(f8test PUBLIC fix8 myfix GTest::gtest GTest::gtest_main ${getopt_lib})
-target_include_directories(f8test PRIVATE test include ${CMAKE_BINARY_DIR}/generated/myfix)
-target_compile_definitions(f8test PRIVATE F8_MYFIX_API_SHARED)
-comp_opts(f8test)
+if(FIX8_BUILD_EXAMPLES)
+	add_executable(f8test test/myfix.cpp)
+	fix8_gen_shared_library(myfix schema/FIX50SP2.xml --verbose --namespace MYFIX --prefix myfix --fixt ${PROJECT_SOURCE_DIR}/schema/FIXT11.xml)
+	target_link_libraries(f8test PUBLIC fix8 myfix GTest::gtest GTest::gtest_main ${getopt_lib})
+	target_include_directories(f8test PRIVATE test include ${PROJECT_BINARY_DIR}/generated/myfix)
+	target_compile_definitions(f8test PRIVATE F8_MYFIX_API_SHARED)
+	comp_opts(f8test)
 
-add_executable(f8print test/myprint.cpp)
-target_link_libraries(f8print PUBLIC fix8 myfix GTest::gtest GTest::gtest_main ${getopt_lib})
-target_include_directories(f8print PRIVATE test include ${CMAKE_BINARY_DIR}/generated/myfix)
-target_compile_definitions(f8print PRIVATE F8_MYFIX_API_SHARED)
-comp_opts(f8print)
+	add_executable(f8print test/myprint.cpp)
+	target_link_libraries(f8print PUBLIC fix8 myfix GTest::gtest GTest::gtest_main ${getopt_lib})
+	target_include_directories(f8print PRIVATE test include ${PROJECT_BINARY_DIR}/generated/myfix)
+	target_compile_definitions(f8print PRIVATE F8_MYFIX_API_SHARED)
+	comp_opts(f8print)
 
-add_executable(harness test/harness.cpp)
-target_link_libraries(harness PUBLIC fix8 myfix GTest::gtest GTest::gtest_main ${getopt_lib})
-target_include_directories(harness PRIVATE test include ${CMAKE_BINARY_DIR}/generated/myfix)
-target_compile_definitions(harness PRIVATE F8_MYFIX_API_SHARED)
-comp_opts(harness)
+	add_executable(harness test/harness.cpp)
+	target_link_libraries(harness PUBLIC fix8 myfix GTest::gtest GTest::gtest_main ${getopt_lib})
+	target_include_directories(harness PRIVATE test include ${PROJECT_BINARY_DIR}/generated/myfix)
+	target_compile_definitions(harness PRIVATE F8_MYFIX_API_SHARED)
+	comp_opts(harness)
 
-add_executable(hftest test/hftest.cpp)
-fix8_gen_shared_library(perf schema/FIX42PERF.xml --verbose --namespace PERF --second --noconst --prefix perf --norealm)
-target_link_libraries(hftest PUBLIC fix8 perf GTest::gtest GTest::gtest_main ${getopt_lib})
-target_include_directories(hftest PRIVATE test include ${CMAKE_BINARY_DIR}/generated/perf)
-target_compile_definitions(hftest PRIVATE F8_PERF_API_SHARED)
-comp_opts(hftest)
+	add_executable(hftest test/hftest.cpp)
+	fix8_gen_shared_library(perf schema/FIX42PERF.xml --verbose --namespace PERF --second --noconst --prefix perf --norealm)
+	target_link_libraries(hftest PUBLIC fix8 perf GTest::gtest GTest::gtest_main ${getopt_lib})
+	target_include_directories(hftest PRIVATE test include ${PROJECT_BINARY_DIR}/generated/perf)
+	target_compile_definitions(hftest PRIVATE F8_PERF_API_SHARED)
+	comp_opts(hftest)
 
-install(TARGETS f8test f8print harness harness)
-install(FILES ${CMAKE_SOURCE_DIR}/test/hf_client.xml ${CMAKE_SOURCE_DIR}/test/myfix_client.xml ${CMAKE_SOURCE_DIR}/test/hf_client_include.xml
-   ${CMAKE_SOURCE_DIR}/test/hf_server.xml ${CMAKE_SOURCE_DIR}/test/myfix_server.xml DESTINATION share/test)
+	if(FIX8_INSTALL)
+		install(TARGETS f8test f8print harness harness)
+		install(FILES ${PROJECT_SOURCE_DIR}/test/hf_client.xml ${PROJECT_SOURCE_DIR}/test/myfix_client.xml ${PROJECT_SOURCE_DIR}/test/hf_client_include.xml
+		   ${PROJECT_SOURCE_DIR}/test/hf_server.xml ${PROJECT_SOURCE_DIR}/test/myfix_server.xml DESTINATION share/test)
+	endif()
+endif()
 
 # ---------------------------------------------------------------------------------------------
 # generated docs
 # ---------------------------------------------------------------------------------------------
-if(BUILD_DOXYGEN_DOCS)
+if(FIX8_BUILD_DOXYGEN_DOCS)
 	find_package(Doxygen REQUIRED)
 	find_package(FLEX REQUIRED)
 	add_subdirectory(doc)
-	add_dependencies(fix8_doxygen myfix)
-	install(DIRECTORY ${CMAKE_BINARY_DIR}/doc/html DESTINATION share/doc)
+	if(TARGET myfix)
+		add_dependencies(fix8_doxygen myfix)
+	endif()
+	if(FIX8_INSTALL)
+		install(DIRECTORY ${PROJECT_BINARY_DIR}/doc/html DESTINATION share/doc)
+	endif()
 endif()
 
 # ---------------------------------------------------------------------------------------------
-target_include_directories(${PROJECT_NAME} INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-
-# ---------------------------------------------------------------------------------------------
 # to dump all non-empty cmake variables
-# cmake -DCMAKE_DUMP_VARS=true ..
+# cmake -DFIX8_DUMP_VARS=true ..
 # ---------------------------------------------------------------------------------------------
-option(CMAKE_DUMP_VARS "dump all cmake vars" false)
-if(CMAKE_DUMP_VARS)
+if(PROJECT_IS_TOP_LEVEL AND NOT DEFINED FIX8_DUMP_VARS AND DEFINED CMAKE_DUMP_VARS)
+	set(FIX8_DUMP_VARS ${CMAKE_DUMP_VARS}) # legacy name
+endif()
+option(FIX8_DUMP_VARS "dump all cmake vars" false)
+if(FIX8_DUMP_VARS)
    get_cmake_property(varname VARIABLES)
    foreach (var ${varname})
       if(NOT ${var} STREQUAL "")
